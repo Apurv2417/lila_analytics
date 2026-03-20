@@ -7,16 +7,14 @@ import plotly.graph_objects as go
 from PIL import Image
 
 # ==========================================
-# ⚙️ CONFIGURATION (CHANGE THIS PART)
+# ⚙️ CONFIGURATION
 # ==========================================
-# Set to True to test on your computer. Set to False before uploading to GitHub.
+# Set to False for GitHub/Streamlit Cloud deployment
 RUNNING_LOCALLY = False 
 
 if RUNNING_LOCALLY:
-    # Your specific Windows path
     DATA_INPUT_PATH = r"E:\lila_analytics\player_data"
 else:
-    # The path Streamlit Cloud will use
     DATA_INPUT_PATH = "player_data"
 # ==========================================
 
@@ -26,27 +24,25 @@ st.title("🎮 LILA BLACK: Level Design Explorer")
 # --- DATA ENGINE ---
 @st.cache_data
 def load_all_data(base_path):
-    # Searches for all gameplay files in subfolders
     search_pattern = os.path.join(base_path, "**", "*.nakama-0*")
     all_files = glob.glob(search_pattern, recursive=True)
     frames = []
     
     if not all_files:
-        st.error(f"No files found in {base_path}. Please check your folder path!")
         return pd.DataFrame()
 
     for f in all_files:
         try:
             df = pd.read_parquet(f)
-            # Decode byte events to strings
+            # Handle byte-string decoding for event names
             df['event'] = df['event'].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
-            # Identify Human vs Bot from filename
+            # Identify bots vs humans from filename
             uid = os.path.basename(f).split('_')[0]
             df['is_bot'] = uid.isdigit()
             frames.append(df)
         except: 
             continue
-    return pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 def map_coords(df):
     if df.empty: return df
@@ -58,7 +54,7 @@ def map_coords(df):
     def transform(row):
         c = configs.get(row['map_id'])
         if not c: return pd.Series([None, None])
-        # World to UV to Pixel math
+        # World X/Z to 1024x1024 Pixel Space
         u = (row['x'] - c['ox']) / c['scale']
         v = (row['z'] - c['oz']) / c['scale']
         return pd.Series([u * 1024, (1 - v) * 1024])
@@ -74,36 +70,36 @@ with st.spinner("Processing gameplay data..."):
 if not df.empty:
     # --- SIDEBAR FILTERS ---
     st.sidebar.header("Filter Map & Match")
-    selected_map = st.sidebar.selectbox("Select Map", df['map_id'].unique())
+    selected_map = st.sidebar.selectbox("Select Map", sorted(df['map_id'].unique()))
     map_df = df[df['map_id'] == selected_map]
 
-    match_list = map_df['match_id'].unique()
+    match_list = sorted(map_df['match_id'].unique())
     selected_match = st.sidebar.selectbox("Select Match ID", match_list)
     match_data = map_df[map_df['match_id'] == selected_match].sort_values('ts')
 
-   # --- TABBED VIEW ---
-    tab1, tab2 = st.tabs(["Match Playback", "Map Heatmaps"])
+    # --- TABBED VIEW ---
+    tab1, tab2 = st.tabs(["🎥 Match Playback", "🔥 Map Heatmaps"])
 
     with tab1:
-        # 1. Calculate duration safely
         if not match_data.empty:
             match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
             max_sec = int(match_data['seconds'].max())
             
-            # 2. Only show slider if the match lasts longer than 0 seconds
+            # Robust Slider Logic
             if max_sec > 0:
                 time_slice = st.slider("Match Timeline (Seconds)", 0, max_sec, max_sec)
             else:
-                st.info("This match has a single time-stamp. Showing all events.")
+                st.info("⏱️ This match has a single time-stamp. Showing all events at once.")
                 time_slice = 0
             
             current_data = match_data[match_data['seconds'] <= time_slice]
             
-            # 3. Create the Plot
-            fig = px.scatter(current_data, x="px", y="py", color="event", symbol="is_bot",
-                             hover_name="user_id", title=f"Match Replay: {selected_match}")
+            fig = px.scatter(current_data, x="px", y="py", 
+                             color="event", symbol="is_bot",
+                             hover_name="user_id", 
+                             title=f"Match Replay: {selected_match}")
             
-            # Background Image Logic
+            # Background Image Loader
             for ext in ['.png', '.jpg']:
                 img_path = f"minimaps/{selected_map}_Minimap{ext}"
                 if os.path.exists(img_path):
@@ -115,24 +111,28 @@ if not df.empty:
             fig.update_yaxes(range=[1024, 0], visible=False)
             st.plotly_chart(fig, use_container_width=True)
         else:
-            st.warning("No data available for this specific match ID.")
+            st.warning("No data found for this match.")
 
     with tab2:
         st.subheader(f"Global Heatmap: {selected_map}")
-        event_filter = st.multiselect("Select Events for Heatmap", df['event'].unique(), default=['Kill', 'Killed'])
+        event_filter = st.multiselect("Select Events for Heatmap", sorted(df['event'].unique()), default=['Kill', 'Killed'])
         heat_df = map_df[map_df['event'].isin(event_filter)]
         
-        fig_heat = px.density_heatmap(heat_df, x="px", y="py", nbinsx=50, nbinsy=50, 
-                                      color_continuous_scale="Reds", title="Combat Density Map")
-        
-        # Add background image to heatmap too
-        for ext in ['.png', '.jpg']:
-            img_path = f"minimaps/{selected_map}_Minimap{ext}"
-            if os.path.exists(img_path):
-                img = Image.open(img_path)
-                fig_heat.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.8, layer="below"))
-                break
+        if not heat_df.empty:
+            fig_heat = px.density_heatmap(heat_df, x="px", y="py", nbinsx=50, nbinsy=50, 
+                                          color_continuous_scale="Reds", title="Combat Density Map")
+            
+            for ext in ['.png', '.jpg']:
+                img_path = f"minimaps/{selected_map}_Minimap{ext}"
+                if os.path.exists(img_path):
+                    img = Image.open(img_path)
+                    fig_heat.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.8, layer="below"))
+                    break
 
-        fig_heat.update_xaxes(range=[0, 1024], visible=False)
-        fig_heat.update_yaxes(range=[1024, 0], visible=False)
-        st.plotly_chart(fig_heat, use_container_width=True)
+            fig_heat.update_xaxes(range=[0, 1024], visible=False)
+            fig_heat.update_yaxes(range=[1024, 0], visible=False)
+            st.plotly_chart(fig_heat, use_container_width=True)
+        else:
+            st.info("Select events in the filter above to generate a heatmap.")
+else:
+    st.error("No data could be loaded. Please ensure the 'player_data' folder is present and contains parquet files.")
