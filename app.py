@@ -10,7 +10,7 @@ from PIL import Image
 # ⚙️ CONFIGURATION (CHANGE THIS PART)
 # ==========================================
 # Set to True to test on your computer. Set to False before uploading to GitHub.
-RUNNING_LOCALLY = True 
+RUNNING_LOCALLY = False 
 
 if RUNNING_LOCALLY:
     # Your specific Windows path
