@@ -81,10 +81,10 @@ if not df.empty:
     selected_match = st.sidebar.selectbox("Select Match ID", match_list)
     match_data = map_df[map_df['match_id'] == selected_match].sort_values('ts')
 
-    # --- TABBED VIEW ---
+   # --- TABBED VIEW ---
     tab1, tab2 = st.tabs(["Match Playback", "Map Heatmaps"])
 
-with tab1:
+    with tab1:
         # 1. Calculate duration safely
         if not match_data.empty:
             match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
@@ -136,5 +136,3 @@ with tab1:
         fig_heat.update_xaxes(range=[0, 1024], visible=False)
         fig_heat.update_yaxes(range=[1024, 0], visible=False)
         st.plotly_chart(fig_heat, use_container_width=True)
-else:
-    st.warning("No data loaded. Check your path configuration at the top of the file.")
