@@ -84,28 +84,38 @@ if not df.empty:
     # --- TABBED VIEW ---
     tab1, tab2 = st.tabs(["Match Playback", "Map Heatmaps"])
 
-    with tab1:
-        # Playback Slider Logic
-        match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
-        max_sec = int(match_data['seconds'].max())
-        time_slice = st.slider("Match Timeline (Seconds)", 0, max_sec, max_sec)
-        
-        current_data = match_data[match_data['seconds'] <= time_slice]
-        
-        fig = px.scatter(current_data, x="px", y="py", color="event", symbol="is_bot",
-                         hover_name="user_id", title=f"Match Replay: {selected_match}")
-        
-        # Robust Background Image Loader (PNG/JPG Fix)
-        for ext in ['.png', '.jpg']:
-            img_path = f"minimaps/{selected_map}_Minimap{ext}"
-            if os.path.exists(img_path):
-                img = Image.open(img_path)
-                fig.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.7, layer="below"))
-                break
-                
-        fig.update_xaxes(range=[0, 1024], visible=False)
-        fig.update_yaxes(range=[1024, 0], visible=False)
-        st.plotly_chart(fig, use_container_width=True)
+with tab1:
+        # 1. Calculate duration safely
+        if not match_data.empty:
+            match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
+            max_sec = int(match_data['seconds'].max())
+            
+            # 2. Only show slider if the match lasts longer than 0 seconds
+            if max_sec > 0:
+                time_slice = st.slider("Match Timeline (Seconds)", 0, max_sec, max_sec)
+            else:
+                st.info("This match has a single time-stamp. Showing all events.")
+                time_slice = 0
+            
+            current_data = match_data[match_data['seconds'] <= time_slice]
+            
+            # 3. Create the Plot
+            fig = px.scatter(current_data, x="px", y="py", color="event", symbol="is_bot",
+                             hover_name="user_id", title=f"Match Replay: {selected_match}")
+            
+            # Background Image Logic
+            for ext in ['.png', '.jpg']:
+                img_path = f"minimaps/{selected_map}_Minimap{ext}"
+                if os.path.exists(img_path):
+                    img = Image.open(img_path)
+                    fig.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.7, layer="below"))
+                    break
+                    
+            fig.update_xaxes(range=[0, 1024], visible=False)
+            fig.update_yaxes(range=[1024, 0], visible=False)
+            st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.warning("No data available for this specific match ID.")
 
     with tab2:
         st.subheader(f"Global Heatmap: {selected_map}")
