@@ -34,8 +34,9 @@ def load_all_data(base_path):
         try:
             df = pd.read_parquet(f)
             
-            # --- CRITICAL FIX: Ensure 'ts' is a number ---
+            # --- SAFETY FIX 1: Convert ts and drop bad rows ---
             df['ts'] = pd.to_numeric(df['ts'], errors='coerce')
+            df = df.dropna(subset=['ts'])
             
             path_parts = f.split(os.sep)
             df['date'] = path_parts[-2] if len(path_parts) >= 2 else "Unknown"
@@ -89,12 +90,17 @@ if not df.empty:
         selected_map = st.sidebar.selectbox("Select Map", available_maps)
         map_df = filtered_df[filtered_df['map_id'] == selected_map]
 
-        # --- UPDATED SMART MATCH SELECTION ---
+        # --- SAFETY FIX 2: Better Duration Logic ---
         def get_duration(m_id):
             m_data = map_df[map_df['match_id'] == m_id]
-            # README says ts is milliseconds. Max - Min / 1000 = Seconds.
+            if m_data.empty: return 0
             diff = m_data['ts'].max() - m_data['ts'].min()
-            return int(diff / 1000) if diff > 0 else 0
+            # Handle milliseconds vs nanoseconds vs seconds
+            if diff > 1000000000: # Likely Nanoseconds
+                return int(diff / 1000000000)
+            elif diff > 10000: # Likely Milliseconds
+                return int(diff / 1000)
+            return int(diff)
 
         match_list = sorted(map_df['match_id'].unique())
         match_options = {m: f"{m[:8]}... ({get_duration(m)}s)" for m in match_list}
@@ -112,15 +118,23 @@ if not df.empty:
 
         with tab1:
             if not match_data.empty:
-                # Force relative seconds calculation
-                match_data['seconds'] = ((match_data['ts'] - match_data['ts'].min()) / 1000).astype(int)
+                # --- SAFETY FIX 3: Safe conversion to seconds ---
+                t0 = match_data['ts'].min()
+                match_data['seconds'] = (match_data['ts'] - t0)
+                
+                # Dynamic scaling
+                max_diff = match_data['seconds'].max()
+                if max_diff > 1000000000: match_data['seconds'] = match_data['seconds'] / 1000000000
+                elif max_diff > 10000: match_data['seconds'] = match_data['seconds'] / 1000
+                
+                match_data['seconds'] = match_data['seconds'].fillna(0).astype(int)
                 max_sec = int(match_data['seconds'].max())
                 
                 if max_sec > 0:
                     st.write(f"⏱️ **Match Duration:** {max_sec} seconds")
                     time_slice = st.slider("Scrub Through Timeline", 0, max_sec, max_sec)
                 else:
-                    st.info("⏱️ Single-event or 0s match. Showing static view.")
+                    st.info("⏱️ Static view (0s match).")
                     time_slice = 0
                 
                 current_data = match_data[match_data['seconds'] <= time_slice]
@@ -137,6 +151,8 @@ if not df.empty:
                 fig.update_xaxes(range=[0, 1024], visible=False)
                 fig.update_yaxes(range=[1024, 0], visible=False)
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No data found for this match.")
 
         with tab2:
             st.subheader(f"Combat Intensity: {selected_map}")
