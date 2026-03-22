@@ -107,30 +107,29 @@ if not df.empty:
             heat_df = map_df[map_df['event'].isin(event_filter)]
             
             if not heat_df.empty:
-                # --- THE "GLOW" SPOT LOGIC ---
                 fig_heat = go.Figure()
 
-                # Add the contour/blob layer
+                # --- ADVANCED GLOW LAYER ---
                 fig_heat.add_trace(go.Histogram2dContour(
                     x=heat_df['px'],
                     y=heat_df['py'],
                     name='Combat Intensity',
                     colorscale=[
-                        [0, 'rgba(255,0,0,0)'],     # 0 kills = Completely Invisible
-                        [0.1, 'rgba(255,0,0,0.2)'], # Low heat = Faint Red Glow
-                        [0.5, 'rgba(255,0,0,0.6)'], # Mid heat = Solid Red
-                        [1, 'rgba(139,0,0,1)']      # High heat = Dark Crimson
+                        [0, 'rgba(255,255,255,0)'],     # 0 kills: Completely Transparent
+                        [0.1, 'rgba(255,255,255,0.6)'], # Low: Faint White Glow
+                        [0.4, 'rgba(255,100,100,0.8)'], # Mid: Bright Red
+                        [1.0, 'rgba(139,0,0,1)']        # High: Deep Crimson
                     ],
                     showscale=True,
-                    ncontours=20,
+                    ncontours=30, # More contours = smoother "blobs"
                     contours=dict(coloring='heatmap', showlines=False),
                     line_width=0,
-                    reversescale=False,
-                    nbinsx=60,
-                    nbinsy=60
+                    nbinsx=50,
+                    nbinsy=50,
+                    # --- HOVER CUSTOMIZATION ---
+                    hovertemplate="<b>Kills in Area: %{z}</b><br>Location: %{x:.0f}, %{y:.0f}<extra></extra>"
                 ))
 
-                # Overlay the Map Image
                 for ext in ['.png', '.jpg']:
                     img_path = f"minimaps/{selected_map}_Minimap{ext}"
                     if os.path.exists(img_path):
@@ -142,7 +141,6 @@ if not df.empty:
                         ))
                         break
 
-                # Final Layout Fixes
                 fig_heat.update_layout(
                     margin=dict(l=0, r=0, t=40, b=0),
                     paper_bgcolor='rgba(0,0,0,0)',
@@ -153,8 +151,8 @@ if not df.empty:
                 
                 st.plotly_chart(fig_heat, use_container_width=True)
             else:
-                st.info("Select events to view the combat glow.")
+                st.info("Select combat events to view the heatmap.")
     else:
-        st.info("Select a date to load data.")
+        st.info("Select a date in the sidebar.")
 else:
-    st.error("Data directory missing or empty.")
+    st.error("No data found. Check your 'player_data' folder.")
