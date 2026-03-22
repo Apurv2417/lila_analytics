@@ -34,8 +34,11 @@ def load_all_data(base_path):
         try:
             df = pd.read_parquet(f)
             
-            # --- SAFETY FIX 1: Convert ts and drop bad rows ---
-            df['ts'] = pd.to_numeric(df['ts'], errors='coerce')
+            # --- THE CRITICAL FIX: Standardize Timestamps ---
+            if not pd.api.types.is_datetime64_any_dtype(df['ts']):
+                # Convert milliseconds to proper datetime
+                df['ts'] = pd.to_datetime(df['ts'], unit='ms', errors='coerce')
+            
             df = df.dropna(subset=['ts'])
             
             path_parts = f.split(os.sep)
@@ -73,42 +76,33 @@ with st.spinner("Processing telemetry..."):
 
 if not df.empty:
     st.sidebar.header("Data Selection")
+    
+    # Date/Player Filters
     all_dates = sorted(df['date'].unique())
     selected_dates = st.sidebar.multiselect("Select Dates", all_dates, default=all_dates)
-    
     show_humans = st.sidebar.checkbox("Show Human Players", value=True)
     show_bots = st.sidebar.checkbox("Show AI Bots", value=True)
 
     filtered_df = df[df['date'].isin(selected_dates)]
-    if not show_humans:
-        filtered_df = filtered_df[filtered_df['is_bot'] == True]
-    if not show_bots:
-        filtered_df = filtered_df[filtered_df['is_bot'] == False]
+    if not show_humans: filtered_df = filtered_df[filtered_df['is_bot'] == True]
+    if not show_bots: filtered_df = filtered_df[filtered_df['is_bot'] == False]
     
     if not filtered_df.empty:
         available_maps = sorted(filtered_df['map_id'].unique())
         selected_map = st.sidebar.selectbox("Select Map", available_maps)
         map_df = filtered_df[filtered_df['map_id'] == selected_map]
 
-        # --- SAFETY FIX 2: Better Duration Logic ---
-        def get_duration(m_id):
-            m_data = map_df[map_df['match_id'] == m_id]
-            if m_data.empty: return 0
-            diff = m_data['ts'].max() - m_data['ts'].min()
-            # Handle milliseconds vs nanoseconds vs seconds
-            if diff > 1000000000: # Likely Nanoseconds
-                return int(diff / 1000000000)
-            elif diff > 10000: # Likely Milliseconds
-                return int(diff / 1000)
-            return int(diff)
-
-        match_list = sorted(map_df['match_id'].unique())
-        match_options = {m: f"{m[:8]}... ({get_duration(m)}s)" for m in match_list}
-        sorted_matches = sorted(match_list, key=get_duration, reverse=True)
+        # --- BULLETPROOF DURATION LOGIC ---
+        # Group by match_id to get durations once (faster + safer)
+        match_stats = map_df.groupby('match_id')['ts'].agg(['min', 'max'])
+        match_stats['duration'] = (match_stats['max'] - match_stats['min']).dt.total_seconds().astype(int)
+        
+        match_list = sorted(map_df['match_id'].unique(), key=lambda x: match_stats.loc[x, 'duration'], reverse=True)
+        match_options = {m: f"{m[:8]}... ({match_stats.loc[m, 'duration']}s)" for m in match_list}
 
         selected_match = st.sidebar.selectbox(
             "Select Match ID", 
-            sorted_matches, 
+            match_list, 
             format_func=lambda x: match_options[x]
         )
         
@@ -118,16 +112,8 @@ if not df.empty:
 
         with tab1:
             if not match_data.empty:
-                # --- SAFETY FIX 3: Safe conversion to seconds ---
-                t0 = match_data['ts'].min()
-                match_data['seconds'] = (match_data['ts'] - t0)
-                
-                # Dynamic scaling
-                max_diff = match_data['seconds'].max()
-                if max_diff > 1000000000: match_data['seconds'] = match_data['seconds'] / 1000000000
-                elif max_diff > 10000: match_data['seconds'] = match_data['seconds'] / 1000
-                
-                match_data['seconds'] = match_data['seconds'].fillna(0).astype(int)
+                # Seconds since start calculation
+                match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
                 max_sec = int(match_data['seconds'].max())
                 
                 if max_sec > 0:
@@ -151,8 +137,6 @@ if not df.empty:
                 fig.update_xaxes(range=[0, 1024], visible=False)
                 fig.update_yaxes(range=[1024, 0], visible=False)
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("No data found for this match.")
 
         with tab2:
             st.subheader(f"Combat Intensity: {selected_map}")
