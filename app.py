@@ -155,4 +155,4 @@ if not df.empty:
     else:
         st.info("Please select at least one date in the sidebar.")
 else:
-    st.error("No data could be loaded. Check your 'player_data' folder.")s
+    st.error("No data could be loaded. Check your 'player_data' folder.")
