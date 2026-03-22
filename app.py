@@ -9,6 +9,7 @@ from PIL import Image
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
+# Set to False for GitHub/Streamlit Cloud deployment
 RUNNING_LOCALLY = False 
 
 if RUNNING_LOCALLY:
@@ -36,8 +37,11 @@ def load_all_data(base_path):
             path_parts = f.split(os.sep)
             df['date'] = path_parts[-2] if len(path_parts) >= 2 else "Unknown"
             df['event'] = df['event'].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
+            
+            # Bot Detection Logic (As per README: Numeric IDs = Bots)
             uid = os.path.basename(f).split('_')[0]
             df['is_bot'] = uid.isdigit()
+            
             frames.append(df)
         except: 
             continue
@@ -60,25 +64,43 @@ def map_coords(df):
     df[['px', 'py']] = df.apply(transform, axis=1)
     return df
 
-with st.spinner("Processing telemetry data..."):
+# --- LOADING ---
+with st.spinner("Processing telemetry..."):
     raw_df = load_all_data(DATA_INPUT_PATH) 
     df = map_coords(raw_df)
 
 if not df.empty:
+    # --- SIDEBAR FILTERS ---
     st.sidebar.header("Data Selection")
+    
+    # 1. Date Filter
     all_dates = sorted(df['date'].unique())
     selected_dates = st.sidebar.multiselect("Select Dates", all_dates, default=all_dates)
-    date_filtered_df = df[df['date'].isin(selected_dates)]
     
-    if not date_filtered_df.empty:
-        available_maps = sorted(date_filtered_df['map_id'].unique())
-        selected_map = st.sidebar.selectbox("Select Map", available_maps)
-        map_df = date_filtered_df[date_filtered_df['map_id'] == selected_map]
+    # 2. Player Type Toggles
+    st.sidebar.subheader("Filter by Player Type")
+    show_humans = st.sidebar.checkbox("Show Human Players", value=True)
+    show_bots = st.sidebar.checkbox("Show AI Bots", value=True)
 
+    # Apply Logic
+    filtered_df = df[df['date'].isin(selected_dates)]
+    if not show_humans:
+        filtered_df = filtered_df[filtered_df['is_bot'] == True]
+    if not show_bots:
+        filtered_df = filtered_df[filtered_df['is_bot'] == False]
+    
+    if not filtered_df.empty:
+        # 3. Map Filter
+        available_maps = sorted(filtered_df['map_id'].unique())
+        selected_map = st.sidebar.selectbox("Select Map", available_maps)
+        map_df = filtered_df[filtered_df['map_id'] == selected_map]
+
+        # 4. Match Filter
         match_list = sorted(map_df['match_id'].unique())
         selected_match = st.sidebar.selectbox("Select Match ID", match_list)
         match_data = map_df[map_df['match_id'] == selected_match].sort_values('ts')
 
+        # --- TABBED VIEW ---
         tab1, tab2 = st.tabs(["🎥 Match Playback", "🔥 Combat Glow Map"])
 
         with tab1:
@@ -102,31 +124,31 @@ if not df.empty:
                 st.plotly_chart(fig, use_container_width=True)
 
         with tab2:
-            st.subheader(f"Combat Hotspots: {selected_map}")
+            st.subheader(f"Combat Intensity: {selected_map}")
             event_filter = st.multiselect("Select Events", sorted(df['event'].unique()), default=['Kill', 'Killed'])
             heat_df = map_df[map_df['event'].isin(event_filter)]
             
             if not heat_df.empty:
                 fig_heat = go.Figure()
 
-                # --- ADVANCED GLOW LAYER ---
+                # --- THE GLOW LAYER ---
                 fig_heat.add_trace(go.Histogram2dContour(
                     x=heat_df['px'],
                     y=heat_df['py'],
                     name='Combat Intensity',
                     colorscale=[
-                        [0, 'rgba(255,255,255,0)'],     # 0 kills: Completely Transparent
-                        [0.1, 'rgba(255,255,255,0.6)'], # Low: Faint White Glow
+                        [0, 'rgba(255,255,255,0)'],     # 0 kills: Invisible
+                        [0.1, 'rgba(255,255,255,0.7)'], # Low: Soft White Glow
                         [0.4, 'rgba(255,100,100,0.8)'], # Mid: Bright Red
-                        [1.0, 'rgba(139,0,0,1)']        # High: Deep Crimson
+                        [1.0, 'rgba(139,0,0,1)']        # High: Dark Red
                     ],
                     showscale=True,
-                    ncontours=30, # More contours = smoother "blobs"
+                    ncontours=30,
                     contours=dict(coloring='heatmap', showlines=False),
                     line_width=0,
                     nbinsx=50,
                     nbinsy=50,
-                    # --- HOVER CUSTOMIZATION ---
+                    # Show Kill count on hover
                     hovertemplate="<b>Kills in Area: %{z}</b><br>Location: %{x:.0f}, %{y:.0f}<extra></extra>"
                 ))
 
@@ -151,8 +173,8 @@ if not df.empty:
                 
                 st.plotly_chart(fig_heat, use_container_width=True)
             else:
-                st.info("Select combat events to view the heatmap.")
+                st.info("Filter for combat events to view the heatmap.")
     else:
-        st.info("Select a date in the sidebar.")
+        st.info("Please adjust filters in the sidebar to load data.")
 else:
-    st.error("No data found. Check your 'player_data' folder.")
+    st.error("Data folder not found. Please ensure 'player_data' is uploaded.")
