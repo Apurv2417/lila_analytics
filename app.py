@@ -57,7 +57,7 @@ def load_all_data(base_path):
 
 def map_coords(df):
     if df.empty: return df
-    # Provided configuration for coordinate mapping
+    # Provided configuration for coordinate mapping from README
     configs = {
         "AmbroseValley": {"scale": 900, "ox": -370, "oz": -473},
         "GrandRift": {"scale": 581, "ox": -290, "oz": -290},
@@ -130,7 +130,7 @@ if not df.empty:
                         break
                         
                 fig.update_xaxes(range=[0, 1024], visible=False)
-                fig.update_yaxes(range=[1024, 0], visible=False) # Flipped Y range
+                fig.update_yaxes(range=[1024, 0], visible=False) 
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.warning("No data for selected match.")
@@ -141,24 +141,37 @@ if not df.empty:
             heat_df = map_df[map_df['event'].isin(event_filter)]
             
             if not heat_df.empty:
-                # Fixed range_x and range_y to prevent zooming issue
+                # Fix: Explicitly define range and bins to match map
                 fig_heat = px.density_heatmap(
                     heat_df, x="px", y="py", 
-                    nbinsx=60, nbinsy=60, 
+                    nbinsx=50, nbinsy=50, 
                     range_x=[0, 1024], range_y=[1024, 0],
                     color_continuous_scale="Reds"
                 )
                 
+                # Add background image
                 for ext in ['.png', '.jpg']:
                     img_path = f"minimaps/{selected_map}_Minimap{ext}"
                     if os.path.exists(img_path):
                         img = Image.open(img_path)
-                        fig_heat.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.8, layer="below"))
+                        fig_heat.add_layout_image(dict(
+                            source=img, xref="x", yref="y", 
+                            x=0, y=0, sizex=1024, sizey=1024, 
+                            sizing="stretch", opacity=1.0, layer="below"
+                        ))
                         break
 
-                fig_heat.update_xaxes(visible=False, range=[0, 1024])
-                fig_heat.update_yaxes(visible=False, range=[1024, 0])
-                fig_heat.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+                # The "Invisible Background" trick to remove the white box
+                fig_heat.update_layout(
+                    margin=dict(l=0, r=0, t=40, b=0),
+                    paper_bgcolor='rgba(0,0,0,0)',
+                    plot_bgcolor='rgba(0,0,0,0)',
+                    xaxis=dict(range=[0, 1024], visible=False, fixedrange=True),
+                    yaxis=dict(range=[1024, 0], visible=False, fixedrange=True),
+                    coloraxis_showscale=True
+                )
+                
+                fig_heat.update_traces(opacity=0.7)
                 st.plotly_chart(fig_heat, use_container_width=True)
             else:
                 st.info("Filter for combat events to view the heatmap.")
