@@ -9,7 +9,6 @@ from PIL import Image
 # ==========================================
 # ⚙️ CONFIGURATION
 # ==========================================
-# Set to False for GitHub/Streamlit Cloud deployment
 RUNNING_LOCALLY = False 
 
 if RUNNING_LOCALLY:
@@ -34,14 +33,13 @@ def load_all_data(base_path):
     for f in all_files:
         try:
             df = pd.read_parquet(f)
+            
+            # --- CRITICAL FIX: Ensure 'ts' is a number ---
+            df['ts'] = pd.to_numeric(df['ts'], errors='coerce')
+            
             path_parts = f.split(os.sep)
-            # Folder structure: player_data / Month_Day / file
             df['date'] = path_parts[-2] if len(path_parts) >= 2 else "Unknown"
-            
-            # Decode byte-strings to UTF-8
             df['event'] = df['event'].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
-            
-            # Bot Detection Logic: Numeric IDs = Bots, UUIDs = Humans
             uid = os.path.basename(f).split('_')[0]
             df['is_bot'] = uid.isdigit()
             
@@ -52,7 +50,6 @@ def load_all_data(base_path):
 
 def map_coords(df):
     if df.empty: return df
-    # Scaling constants from official documentation
     configs = {
         "AmbroseValley": {"scale": 900, "ox": -370, "oz": -473},
         "GrandRift": {"scale": 581, "ox": -290, "oz": -290},
@@ -61,34 +58,26 @@ def map_coords(df):
     def transform(row):
         c = configs.get(row['map_id'])
         if not c: return pd.Series([None, None])
-        # World X/Z to 1024x1024 UV Mapping
         u = (row['x'] - c['ox']) / c['scale']
         v = (row['z'] - c['oz']) / c['scale']
-        # Flip Y for image space (top-left origin)
         return pd.Series([u * 1024, (1 - v) * 1024])
     
     df[['px', 'py']] = df.apply(transform, axis=1)
     return df
 
-# --- INITIAL LOADING ---
+# --- LOADING ---
 with st.spinner("Processing telemetry..."):
     raw_df = load_all_data(DATA_INPUT_PATH) 
     df = map_coords(raw_df)
 
 if not df.empty:
-    # --- SIDEBAR FILTERS ---
     st.sidebar.header("Data Selection")
-    
-    # 1. Date Selection
     all_dates = sorted(df['date'].unique())
     selected_dates = st.sidebar.multiselect("Select Dates", all_dates, default=all_dates)
     
-    # 2. Player Type Toggles
-    st.sidebar.subheader("Filter by Player Type")
     show_humans = st.sidebar.checkbox("Show Human Players", value=True)
     show_bots = st.sidebar.checkbox("Show AI Bots", value=True)
 
-    # Filter by Dates and Player Type
     filtered_df = df[df['date'].isin(selected_dates)]
     if not show_humans:
         filtered_df = filtered_df[filtered_df['is_bot'] == True]
@@ -96,24 +85,19 @@ if not df.empty:
         filtered_df = filtered_df[filtered_df['is_bot'] == False]
     
     if not filtered_df.empty:
-        # 3. Map Selection
         available_maps = sorted(filtered_df['map_id'].unique())
         selected_map = st.sidebar.selectbox("Select Map", available_maps)
         map_df = filtered_df[filtered_df['map_id'] == selected_map]
 
-        # --- SMART MATCH SELECTION ---
-        # Calculate durations to help the user find matches with valid timelines
+        # --- UPDATED SMART MATCH SELECTION ---
         def get_duration(m_id):
             m_data = map_df[map_df['match_id'] == m_id]
-            if pd.api.types.is_datetime64_any_dtype(m_data['ts']):
-                sec = (m_data['ts'].max() - m_data['ts'].min()).total_seconds()
-            else:
-                sec = (m_data['ts'].max() - m_data['ts'].min()) / 1000
-            return int(sec)
+            # README says ts is milliseconds. Max - Min / 1000 = Seconds.
+            diff = m_data['ts'].max() - m_data['ts'].min()
+            return int(diff / 1000) if diff > 0 else 0
 
         match_list = sorted(map_df['match_id'].unique())
         match_options = {m: f"{m[:8]}... ({get_duration(m)}s)" for m in match_list}
-        # Sort matches so longest ones appear first
         sorted_matches = sorted(match_list, key=get_duration, reverse=True)
 
         selected_match = st.sidebar.selectbox(
@@ -124,24 +108,19 @@ if not df.empty:
         
         match_data = map_df[map_df['match_id'] == selected_match].sort_values('ts')
 
-        # --- MAIN TABS ---
         tab1, tab2 = st.tabs(["🎥 Match Playback", "🔥 Combat Glow Map"])
 
         with tab1:
             if not match_data.empty:
-                # Robust seconds calculation for slider
-                if pd.api.types.is_datetime64_any_dtype(match_data['ts']):
-                    match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
-                else:
-                    match_data['seconds'] = ((match_data['ts'] - match_data['ts'].min()) / 1000).astype(int)
-                
+                # Force relative seconds calculation
+                match_data['seconds'] = ((match_data['ts'] - match_data['ts'].min()) / 1000).astype(int)
                 max_sec = int(match_data['seconds'].max())
                 
                 if max_sec > 0:
                     st.write(f"⏱️ **Match Duration:** {max_sec} seconds")
                     time_slice = st.slider("Scrub Through Timeline", 0, max_sec, max_sec)
                 else:
-                    st.info("⏱️ Single-event match. No timeline available.")
+                    st.info("⏱️ Single-event or 0s match. Showing static view.")
                     time_slice = 0
                 
                 current_data = match_data[match_data['seconds'] <= time_slice]
@@ -149,19 +128,15 @@ if not df.empty:
                 fig = px.scatter(current_data, x="px", y="py", color="event", symbol="is_bot",
                                  hover_name="user_id", title=f"Replay: {selected_match}")
                 
-                # Minimap Overlay
                 for ext in ['.png', '.jpg']:
                     img_path = f"minimaps/{selected_map}_Minimap{ext}"
                     if os.path.exists(img_path):
                         img = Image.open(img_path)
                         fig.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.7, layer="below"))
                         break
-                
                 fig.update_xaxes(range=[0, 1024], visible=False)
                 fig.update_yaxes(range=[1024, 0], visible=False)
                 st.plotly_chart(fig, use_container_width=True)
-            else:
-                st.warning("No playback data available.")
 
         with tab2:
             st.subheader(f"Combat Intensity: {selected_map}")
@@ -170,43 +145,22 @@ if not df.empty:
             
             if not heat_df.empty:
                 fig_heat = go.Figure()
-                
-                # Glow/Contour Layer
                 fig_heat.add_trace(go.Histogram2dContour(
-                    x=heat_df['px'],
-                    y=heat_df['py'],
-                    name='Intensity',
-                    colorscale=[
-                        [0, 'rgba(255,255,255,0)'],     # Transparent base
-                        [0.1, 'rgba(255,255,255,0.7)'], # Faint white glow
-                        [0.4, 'rgba(255,100,100,0.8)'], # Bright red
-                        [1.0, 'rgba(139,0,0,1)']        # Dark crimson
-                    ],
-                    ncontours=30,
-                    contours=dict(coloring='heatmap', showlines=False),
+                    x=heat_df['px'], y=heat_df['py'],
+                    colorscale=[[0, 'rgba(255,255,255,0)'], [0.1, 'rgba(255,255,255,0.7)'], [0.4, 'rgba(255,100,100,0.8)'], [1.0, 'rgba(139,0,0,1)']],
+                    ncontours=30, contours=dict(coloring='heatmap', showlines=False),
                     nbinsx=50, nbinsy=50,
                     hovertemplate="<b>Kills in Area: %{z}</b><br>Location: %{x:.0f}, %{y:.0f}<extra></extra>"
                 ))
-
-                # Background Map
                 for ext in ['.png', '.jpg']:
                     img_path = f"minimaps/{selected_map}_Minimap{ext}"
                     if os.path.exists(img_path):
                         img = Image.open(img_path)
                         fig_heat.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=1.0, layer="below"))
                         break
-
-                fig_heat.update_layout(
-                    margin=dict(l=0, r=0, t=40, b=0),
-                    paper_bgcolor='rgba(0,0,0,0)',
-                    plot_bgcolor='rgba(0,0,0,0)',
-                    xaxis=dict(range=[0, 1024], visible=False, fixedrange=True),
-                    yaxis=dict(range=[1024, 0], visible=False, fixedrange=True)
-                )
+                fig_heat.update_layout(margin=dict(l=0, r=0, t=40, b=0), paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(0,0,0,0)', xaxis=dict(range=[0, 1024], visible=False), yaxis=dict(range=[1024, 0], visible=False))
                 st.plotly_chart(fig_heat, use_container_width=True)
-            else:
-                st.info("Select events to view hot zones.")
     else:
-        st.info("Please adjust filters to load data.")
+        st.info("Adjust filters to load data.")
 else:
-    st.error("Telemetry data not found. Check your file structure.")
+    st.error("Telemetry data not found.")
