@@ -24,7 +24,6 @@ st.title("🎮 LILA BLACK: Level Design Explorer")
 # --- DATA ENGINE ---
 @st.cache_data
 def load_all_data(base_path):
-    # Search for files recursively
     search_pattern = os.path.join(base_path, "**", "*.nakama-0*")
     all_files = glob.glob(search_pattern, recursive=True)
     frames = []
@@ -36,13 +35,9 @@ def load_all_data(base_path):
         try:
             df = pd.read_parquet(f)
             
-            # --- DATE EXTRACTION ---
-            # Extract "February_10" from "player_data/February_10/filename"
+            # Extract Date from folder structure
             path_parts = f.split(os.sep)
-            if len(path_parts) >= 2:
-                df['date'] = path_parts[-2]
-            else:
-                df['date'] = "Unknown"
+            df['date'] = path_parts[-2] if len(path_parts) >= 2 else "Unknown"
 
             # Decode byte-string events
             df['event'] = df['event'].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
@@ -66,6 +61,7 @@ def map_coords(df):
     def transform(row):
         c = configs.get(row['map_id'])
         if not c: return pd.Series([None, None])
+        # World X/Z to 1024x1024 Pixel Space
         u = (row['x'] - c['ox']) / c['scale']
         v = (row['z'] - c['oz']) / c['scale']
         return pd.Series([u * 1024, (1 - v) * 1024])
@@ -82,15 +78,13 @@ if not df.empty:
     # --- SIDEBAR FILTERS ---
     st.sidebar.header("Data Filters")
     
-    # 1. Date Filter (Multi-select)
+    # 1. Date Filter
     all_dates = sorted(df['date'].unique())
     selected_dates = st.sidebar.multiselect("Select Dates", all_dates, default=all_dates)
-    
-    # Filter data by date first
     date_filtered_df = df[df['date'].isin(selected_dates)]
     
-    # 2. Map Filter
     if not date_filtered_df.empty:
+        # 2. Map Filter
         available_maps = sorted(date_filtered_df['map_id'].unique())
         selected_map = st.sidebar.selectbox("Select Map", available_maps)
         map_df = date_filtered_df[date_filtered_df['map_id'] == selected_map]
@@ -111,7 +105,7 @@ if not df.empty:
                 if max_sec > 0:
                     time_slice = st.slider("Match Timeline (Seconds)", 0, max_sec, max_sec)
                 else:
-                    st.info("⏱️ This match has a single time-stamp.")
+                    st.info("⏱️ This match has a single time-stamp. Showing all events.")
                     time_slice = 0
                 
                 current_data = match_data[match_data['seconds'] <= time_slice]
@@ -129,7 +123,7 @@ if not df.empty:
                 fig.update_yaxes(range=[1024, 0], visible=False)
                 st.plotly_chart(fig, use_container_width=True)
             else:
-                st.warning("Select a match to see the playback.")
+                st.warning("No data found for this match.")
 
         with tab2:
             st.subheader(f"Global Heatmap: {selected_map}")
@@ -137,8 +131,13 @@ if not df.empty:
             heat_df = map_df[map_df['event'].isin(event_filter)]
             
             if not heat_df.empty:
-                fig_heat = px.density_heatmap(heat_df, x="px", y="py", nbinsx=50, nbinsy=50, 
-                                              color_continuous_scale="Reds")
+                fig_heat = px.density_heatmap(
+                    heat_df, x="px", y="py", 
+                    nbinsx=50, nbinsy=50, 
+                    range_x=[0, 1024], range_y=[1024, 0],
+                    color_continuous_scale="Reds", 
+                    title=f"Combat Density: {selected_map}"
+                )
                 
                 for ext in ['.png', '.jpg']:
                     img_path = f"minimaps/{selected_map}_Minimap{ext}"
@@ -147,10 +146,13 @@ if not df.empty:
                         fig_heat.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.8, layer="below"))
                         break
 
-                fig_heat.update_xaxes(range=[0, 1024], visible=False)
-                fig_heat.update_yaxes(range=[1024, 0], visible=False)
+                fig_heat.update_xaxes(visible=False)
+                fig_heat.update_yaxes(visible=False)
+                fig_heat.update_layout(margin=dict(l=0, r=0, t=40, b=0))
                 st.plotly_chart(fig_heat, use_container_width=True)
+            else:
+                st.info("Select events to generate a heatmap.")
     else:
         st.info("Please select at least one date in the sidebar.")
 else:
-    st.error("No data found. Ensure the 'player_data' folder is present.")
+    st.error("No data could be loaded. Check your 'player_data' folder.")s
