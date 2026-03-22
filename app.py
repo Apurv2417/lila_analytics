@@ -24,6 +24,7 @@ st.title("🎮 LILA BLACK: Level Design Explorer")
 # --- DATA ENGINE ---
 @st.cache_data
 def load_all_data(base_path):
+    # Search for files recursively
     search_pattern = os.path.join(base_path, "**", "*.nakama-0*")
     all_files = glob.glob(search_pattern, recursive=True)
     frames = []
@@ -34,11 +35,22 @@ def load_all_data(base_path):
     for f in all_files:
         try:
             df = pd.read_parquet(f)
-            # Handle byte-string decoding for event names
+            
+            # --- DATE EXTRACTION ---
+            # Extract "February_10" from "player_data/February_10/filename"
+            path_parts = f.split(os.sep)
+            if len(path_parts) >= 2:
+                df['date'] = path_parts[-2]
+            else:
+                df['date'] = "Unknown"
+
+            # Decode byte-string events
             df['event'] = df['event'].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else x)
-            # Identify bots vs humans from filename
+            
+            # Identify bots vs humans
             uid = os.path.basename(f).split('_')[0]
             df['is_bot'] = uid.isdigit()
+            
             frames.append(df)
         except: 
             continue
@@ -54,7 +66,6 @@ def map_coords(df):
     def transform(row):
         c = configs.get(row['map_id'])
         if not c: return pd.Series([None, None])
-        # World X/Z to 1024x1024 Pixel Space
         u = (row['x'] - c['ox']) / c['scale']
         v = (row['z'] - c['oz']) / c['scale']
         return pd.Series([u * 1024, (1 - v) * 1024])
@@ -69,70 +80,77 @@ with st.spinner("Processing gameplay data..."):
 
 if not df.empty:
     # --- SIDEBAR FILTERS ---
-    st.sidebar.header("Filter Map & Match")
-    selected_map = st.sidebar.selectbox("Select Map", sorted(df['map_id'].unique()))
-    map_df = df[df['map_id'] == selected_map]
+    st.sidebar.header("Data Filters")
+    
+    # 1. Date Filter (Multi-select)
+    all_dates = sorted(df['date'].unique())
+    selected_dates = st.sidebar.multiselect("Select Dates", all_dates, default=all_dates)
+    
+    # Filter data by date first
+    date_filtered_df = df[df['date'].isin(selected_dates)]
+    
+    # 2. Map Filter
+    if not date_filtered_df.empty:
+        available_maps = sorted(date_filtered_df['map_id'].unique())
+        selected_map = st.sidebar.selectbox("Select Map", available_maps)
+        map_df = date_filtered_df[date_filtered_df['map_id'] == selected_map]
 
-    match_list = sorted(map_df['match_id'].unique())
-    selected_match = st.sidebar.selectbox("Select Match ID", match_list)
-    match_data = map_df[map_df['match_id'] == selected_match].sort_values('ts')
+        # 3. Match Filter
+        match_list = sorted(map_df['match_id'].unique())
+        selected_match = st.sidebar.selectbox("Select Match ID", match_list)
+        match_data = map_df[map_df['match_id'] == selected_match].sort_values('ts')
 
-    # --- TABBED VIEW ---
-    tab1, tab2 = st.tabs(["🎥 Match Playback", "🔥 Map Heatmaps"])
+        # --- TABBED VIEW ---
+        tab1, tab2 = st.tabs(["🎥 Match Playback", "🔥 Map Heatmaps"])
 
-    with tab1:
-        if not match_data.empty:
-            match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
-            max_sec = int(match_data['seconds'].max())
-            
-            # Robust Slider Logic
-            if max_sec > 0:
-                time_slice = st.slider("Match Timeline (Seconds)", 0, max_sec, max_sec)
+        with tab1:
+            if not match_data.empty:
+                match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
+                max_sec = int(match_data['seconds'].max())
+                
+                if max_sec > 0:
+                    time_slice = st.slider("Match Timeline (Seconds)", 0, max_sec, max_sec)
+                else:
+                    st.info("⏱️ This match has a single time-stamp.")
+                    time_slice = 0
+                
+                current_data = match_data[match_data['seconds'] <= time_slice]
+                fig = px.scatter(current_data, x="px", y="py", color="event", symbol="is_bot",
+                                 hover_name="user_id", title=f"Match Replay: {selected_match}")
+                
+                for ext in ['.png', '.jpg']:
+                    img_path = f"minimaps/{selected_map}_Minimap{ext}"
+                    if os.path.exists(img_path):
+                        img = Image.open(img_path)
+                        fig.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.7, layer="below"))
+                        break
+                        
+                fig.update_xaxes(range=[0, 1024], visible=False)
+                fig.update_yaxes(range=[1024, 0], visible=False)
+                st.plotly_chart(fig, use_container_width=True)
             else:
-                st.info("⏱️ This match has a single time-stamp. Showing all events at once.")
-                time_slice = 0
-            
-            current_data = match_data[match_data['seconds'] <= time_slice]
-            
-            fig = px.scatter(current_data, x="px", y="py", 
-                             color="event", symbol="is_bot",
-                             hover_name="user_id", 
-                             title=f"Match Replay: {selected_match}")
-            
-            # Background Image Loader
-            for ext in ['.png', '.jpg']:
-                img_path = f"minimaps/{selected_map}_Minimap{ext}"
-                if os.path.exists(img_path):
-                    img = Image.open(img_path)
-                    fig.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.7, layer="below"))
-                    break
-                    
-            fig.update_xaxes(range=[0, 1024], visible=False)
-            fig.update_yaxes(range=[1024, 0], visible=False)
-            st.plotly_chart(fig, use_container_width=True)
-        else:
-            st.warning("No data found for this match.")
+                st.warning("Select a match to see the playback.")
 
-    with tab2:
-        st.subheader(f"Global Heatmap: {selected_map}")
-        event_filter = st.multiselect("Select Events for Heatmap", sorted(df['event'].unique()), default=['Kill', 'Killed'])
-        heat_df = map_df[map_df['event'].isin(event_filter)]
-        
-        if not heat_df.empty:
-            fig_heat = px.density_heatmap(heat_df, x="px", y="py", nbinsx=50, nbinsy=50, 
-                                          color_continuous_scale="Reds", title="Combat Density Map")
+        with tab2:
+            st.subheader(f"Global Heatmap: {selected_map}")
+            event_filter = st.multiselect("Select Events", sorted(df['event'].unique()), default=['Kill', 'Killed'])
+            heat_df = map_df[map_df['event'].isin(event_filter)]
             
-            for ext in ['.png', '.jpg']:
-                img_path = f"minimaps/{selected_map}_Minimap{ext}"
-                if os.path.exists(img_path):
-                    img = Image.open(img_path)
-                    fig_heat.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.8, layer="below"))
-                    break
+            if not heat_df.empty:
+                fig_heat = px.density_heatmap(heat_df, x="px", y="py", nbinsx=50, nbinsy=50, 
+                                              color_continuous_scale="Reds")
+                
+                for ext in ['.png', '.jpg']:
+                    img_path = f"minimaps/{selected_map}_Minimap{ext}"
+                    if os.path.exists(img_path):
+                        img = Image.open(img_path)
+                        fig_heat.add_layout_image(dict(source=img, xref="x", yref="y", x=0, y=0, sizex=1024, sizey=1024, sizing="stretch", opacity=0.8, layer="below"))
+                        break
 
-            fig_heat.update_xaxes(range=[0, 1024], visible=False)
-            fig_heat.update_yaxes(range=[1024, 0], visible=False)
-            st.plotly_chart(fig_heat, use_container_width=True)
-        else:
-            st.info("Select events in the filter above to generate a heatmap.")
+                fig_heat.update_xaxes(range=[0, 1024], visible=False)
+                fig_heat.update_yaxes(range=[1024, 0], visible=False)
+                st.plotly_chart(fig_heat, use_container_width=True)
+    else:
+        st.info("Please select at least one date in the sidebar.")
 else:
-    st.error("No data could be loaded. Please ensure the 'player_data' folder is present and contains parquet files.")
+    st.error("No data found. Ensure the 'player_data' folder is present.")
