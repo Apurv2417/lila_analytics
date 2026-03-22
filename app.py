@@ -105,9 +105,23 @@ if not df.empty:
 
         with tab1:
             if not match_data.empty:
-                match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
-                max_sec = int(match_data['seconds'].max())
-                time_slice = st.slider("Timeline (Seconds)", 0, max_sec, max_sec) if max_sec > 0 else 0
+                # --- ROBUST TIME CALCULATION ---
+                if pd.api.types.is_datetime64_any_dtype(match_data['ts']):
+                    match_data['seconds'] = (match_data['ts'] - match_data['ts'].min()).dt.total_seconds().astype(int)
+                else:
+                    # If it's raw milliseconds (integers), convert to seconds
+                    match_data['seconds'] = ((match_data['ts'] - match_data['ts'].min()) / 1000).astype(int)
+                
+                duration = int(match_data['seconds'].max())
+                
+                # --- SLIDER LOGIC ---
+                if duration > 0:
+                    st.write(f"⏱️ **Match Duration:** {duration} seconds")
+                    time_slice = st.slider("Move to see player journey", 0, duration, duration)
+                else:
+                    st.info("⏱️ This match has a single time-stamp (0s). Showing all events.")
+                    time_slice = 0
+                
                 current_data = match_data[match_data['seconds'] <= time_slice]
                 
                 fig = px.scatter(current_data, x="px", y="py", color="event", symbol="is_bot",
@@ -122,6 +136,8 @@ if not df.empty:
                 fig.update_xaxes(range=[0, 1024], visible=False)
                 fig.update_yaxes(range=[1024, 0], visible=False)
                 st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.warning("No data found for this match.")
 
         with tab2:
             st.subheader(f"Combat Intensity: {selected_map}")
