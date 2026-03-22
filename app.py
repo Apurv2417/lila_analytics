@@ -64,12 +64,12 @@ def apply_mapping(df):
 # --- START APP ---
 st.title("🎮 LILA BLACK: Level Design Explorer")
 
-with st.spinner("Loading telemetry..."):
+with st.spinner("Processing Telemetry..."):
     df = load_all_data(DATA_INPUT_PATH)
     df = apply_mapping(df)
 
 if df.empty:
-    st.error("No valid data found.")
+    st.error("Data Load Error. Check your file structure.")
     st.stop()
 
 # --- SIDEBAR ---
@@ -105,7 +105,8 @@ if not f_df.empty:
             scrub = st.slider("Time Slider", 0, max_r, max_r)
             
             curr = match_data[match_data['rel'] <= scrub]
-            fig = px.scatter(curr, x="px", y="py", color="event", symbol="is_bot")
+            fig = px.scatter(curr, x="px", y="py", color="event", symbol="is_bot",
+                             hover_data={'px':True, 'py':True, 'ts_dt':True})
             
             for ext in ['.png', '.jpg']:
                 m_path = f"minimaps/{sel_map}_Minimap{ext}"
@@ -123,28 +124,31 @@ if not f_df.empty:
         h_df = map_df[map_df['event'].isin(ev_filter)]
         
         if not h_df.empty:
-            # --- INTENSITY CIRCLE LOGIC ---
-            # 1. Create Bins (50x50 grid)
+            # --- INTENSITY BINNING LOGIC ---
+            # Grouping into a grid to show density clusters
             h_df['x_bin'] = pd.cut(h_df['px'], bins=np.linspace(0, 1024, 60))
             h_df['y_bin'] = pd.cut(h_df['py'], bins=np.linspace(0, 1024, 60))
             
-            # 2. Aggregate counts per bin
             binned = h_df.groupby(['x_bin', 'y_bin'], observed=True).size().reset_index(name='Kill Count')
             
-            # 3. Get centers of bins for plotting
-            binned['x_mid'] = binned['x_bin'].apply(lambda x: x.mid)
-            binned['y_mid'] = binned['y_bin'].apply(lambda x: x.mid)
+            # Use midpoints and round for clean "Location" hover
+            binned['Location X'] = binned['x_bin'].apply(lambda x: int(x.mid))
+            binned['Location Y'] = binned['y_bin'].apply(lambda x: int(x.mid))
             
-            # 4. Plot Circles with Light-to-Dark Red Gradient
-            fig_h = px.scatter(binned, x="x_mid", y="y_mid",
+            # --- PLOT: Circles with Red Gradient + Location Hover ---
+            fig_h = px.scatter(binned, x="Location X", y="Location Y",
                                color="Kill Count",
-                               color_continuous_scale="Reds", # Light Red -> Dark Red
+                               color_continuous_scale="Reds",
                                size="Kill Count",
-                               size_max=20,
-                               hover_data={'x_mid':False, 'y_mid':False, 'Kill Count':True},
-                               labels={'Kill Count': 'Total Events'})
+                               size_max=18,
+                               # NEW HOVER LOGIC HERE:
+                               hover_data={
+                                   'Location X': True, 
+                                   'Location Y': True, 
+                                   'Kill Count': True
+                               },
+                               title=f"Event Concentration ({len(h_df)} events)")
             
-            # Make the hover say "Kill Count"
             fig_h.update_traces(marker=dict(line=dict(width=1, color='DarkRed')))
 
             for ext in ['.png', '.jpg']:
@@ -156,7 +160,7 @@ if not f_df.empty:
             
             fig_h.update_xaxes(range=[0, 1024], visible=False)
             fig_h.update_yaxes(range=[1024, 0], visible=False)
-            fig_h.update_layout(coloraxis_colorbar=dict(title="Intensity"), margin=dict(l=0, r=0, t=40, b=0))
+            fig_h.update_layout(coloraxis_colorbar=dict(title="Kill Intensity"), margin=dict(l=0, r=0, t=40, b=0))
             st.plotly_chart(fig_h, use_container_width=True)
         else:
             st.info("Select events to view hotspots.")
