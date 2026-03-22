@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 import os
 import glob
 import plotly.express as px
@@ -15,39 +16,30 @@ DATA_INPUT_PATH = "player_data" if not RUNNING_LOCALLY else r"E:\lila_analytics\
 
 st.set_page_config(page_title="LILA BLACK Analytics", layout="wide")
 
-# --- DATA ENGINE (MEMORY OPTIMIZED) ---
+# --- DATA ENGINE (STABLE & FAST) ---
 @st.cache_data
 def load_all_data(base_path):
     search_pattern = os.path.join(base_path, "**", "*.nakama-0*")
     all_files = glob.glob(search_pattern, recursive=True)
     frames = []
-    
-    # Selective columns to prevent "Oh no!" memory crashes
     COLS = ['ts', 'x', 'z', 'event', 'map_id', 'match_id']
     
     for f in all_files:
         try:
-            temp_df = pd.read_parquet(f, columns=COLS)
-            temp_df['ts'] = pd.to_numeric(temp_df['ts'], errors='coerce')
-            temp_df = temp_df.dropna(subset=['ts'])
+            tmp = pd.read_parquet(f, columns=COLS)
+            tmp['ts'] = pd.to_numeric(tmp['ts'], errors='coerce')
+            tmp = tmp.dropna(subset=['ts'])
+            tmp['event'] = tmp['event'].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else str(x))
             
-            # Decode bytes
-            temp_df['event'] = temp_df['event'].apply(lambda x: x.decode('utf-8') if isinstance(x, bytes) else str(x))
-            
-            # Metadata
             path_parts = f.split(os.sep)
-            temp_df['date'] = path_parts[-2] if len(path_parts) >= 2 else "Unknown"
+            tmp['date'] = path_parts[-2] if len(path_parts) >= 2 else "Unknown"
             uid = os.path.basename(f).split('_')[0]
-            temp_df['is_bot'] = uid.isdigit()
-            
-            frames.append(temp_df)
-        except:
-            continue
+            tmp['is_bot'] = uid.isdigit()
+            frames.append(tmp)
+        except: continue
             
     if not frames: return pd.DataFrame()
     full_df = pd.concat(frames, ignore_index=True)
-
-    # Detect Time Unit
     unit = 'ms' if full_df['ts'].max() > 10**11 else 's'
     full_df['ts_dt'] = pd.to_datetime(full_df['ts'], unit=unit, errors='coerce')
     return full_df.dropna(subset=['ts_dt'])
@@ -69,10 +61,10 @@ def apply_mapping(df):
     df[['px', 'py']] = df.apply(transform, axis=1)
     return df
 
-# --- APP START ---
+# --- START APP ---
 st.title("🎮 LILA BLACK: Level Design Explorer")
 
-with st.spinner("Processing Telemetry..."):
+with st.spinner("Loading telemetry..."):
     df = load_all_data(DATA_INPUT_PATH)
     df = apply_mapping(df)
 
@@ -110,10 +102,10 @@ if not f_df.empty:
         if not match_data.empty:
             match_data['rel'] = (match_data['ts_dt'] - match_data['ts_dt'].min()).dt.total_seconds().astype(int)
             max_r = int(match_data['rel'].max())
-            scrub = st.slider("Time Slider", 0, max_r, max_r) if max_r > 0 else 0
+            scrub = st.slider("Time Slider", 0, max_r, max_r)
             
             curr = match_data[match_data['rel'] <= scrub]
-            fig = px.scatter(curr, x="px", y="py", color="event", symbol="is_bot", title=f"Replay: {sel_match}")
+            fig = px.scatter(curr, x="px", y="py", color="event", symbol="is_bot")
             
             for ext in ['.png', '.jpg']:
                 m_path = f"minimaps/{sel_map}_Minimap{ext}"
@@ -126,20 +118,34 @@ if not f_df.empty:
             st.plotly_chart(fig, use_container_width=True)
 
     with tab_heat:
-        st.subheader(f"Combat Distribution: {sel_map}")
-        ev_filter = st.multiselect("Select Events for Heatmap", sorted(df['event'].unique()), default=['Kill', 'Killed'])
+        st.subheader(f"Tactical Kill Density: {sel_map}")
+        ev_filter = st.multiselect("Select Events", sorted(df['event'].unique()), default=['Kill', 'Killed'])
         h_df = map_df[map_df['event'].isin(ev_filter)]
         
         if not h_df.empty:
-            # --- RESTORED CIRCLE LOGIC ---
-            fig_h = px.scatter(h_df, x="px", y="py", 
-                               color="event", 
-                               opacity=0.6,
-                               size_max=15,
-                               title=f"Event Concentration ({len(h_df)} events)")
+            # --- INTENSITY CIRCLE LOGIC ---
+            # 1. Create Bins (50x50 grid)
+            h_df['x_bin'] = pd.cut(h_df['px'], bins=np.linspace(0, 1024, 60))
+            h_df['y_bin'] = pd.cut(h_df['py'], bins=np.linspace(0, 1024, 60))
             
-            # Make the dots look like "heat" by increasing marker size
-            fig_h.update_traces(marker=dict(size=12, line=dict(width=0)))
+            # 2. Aggregate counts per bin
+            binned = h_df.groupby(['x_bin', 'y_bin'], observed=True).size().reset_index(name='Kill Count')
+            
+            # 3. Get centers of bins for plotting
+            binned['x_mid'] = binned['x_bin'].apply(lambda x: x.mid)
+            binned['y_mid'] = binned['y_bin'].apply(lambda x: x.mid)
+            
+            # 4. Plot Circles with Light-to-Dark Red Gradient
+            fig_h = px.scatter(binned, x="x_mid", y="y_mid",
+                               color="Kill Count",
+                               color_continuous_scale="Reds", # Light Red -> Dark Red
+                               size="Kill Count",
+                               size_max=20,
+                               hover_data={'x_mid':False, 'y_mid':False, 'Kill Count':True},
+                               labels={'Kill Count': 'Total Events'})
+            
+            # Make the hover say "Kill Count"
+            fig_h.update_traces(marker=dict(line=dict(width=1, color='DarkRed')))
 
             for ext in ['.png', '.jpg']:
                 m_path = f"minimaps/{sel_map}_Minimap{ext}"
@@ -150,7 +156,7 @@ if not f_df.empty:
             
             fig_h.update_xaxes(range=[0, 1024], visible=False)
             fig_h.update_yaxes(range=[1024, 0], visible=False)
-            fig_h.update_layout(margin=dict(l=0, r=0, t=40, b=0))
+            fig_h.update_layout(coloraxis_colorbar=dict(title="Intensity"), margin=dict(l=0, r=0, t=40, b=0))
             st.plotly_chart(fig_h, use_container_width=True)
         else:
-            st.info("Select events to view locations.")
+            st.info("Select events to view hotspots.")
