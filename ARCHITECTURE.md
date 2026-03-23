@@ -1,4 +1,4 @@
-# 🏗️ Architecture: LILA BLACK Analytics Tool
+#  Architecture: LILA BLACK Analytics Tool
 
 ## 1. Tech Stack & Rationale
 * **Python 3.13:** Chosen as the core language for its powerful data processing ecosystem.
